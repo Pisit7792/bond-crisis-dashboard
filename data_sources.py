@@ -31,6 +31,16 @@ FRED_SERIES = {
     "BAMLH0A0HYM2": "ICE BofA US High Yield OAS",
     "BAMLC0A0CM": "ICE BofA US Corporate (IG) OAS",
     "VIXCLS": "CBOE VIX",
+    # v3: สำหรับ 6 โมเดลทำกำไร + หน้าวิกฤตแบงก์รัน
+    "CPIAUCSL": "CPI (ดัชนี, รายเดือน)",
+    "T5YIE": "เงินเฟ้อคาดหวัง 5 ปี (breakeven)",
+    "DCOILWTICO": "น้ำมัน WTI (spot)",
+    "SOFR": "SOFR",
+    "EFFR": "Effective Fed Funds Rate",
+    "BORROW": "ยอดกู้จาก Fed ของสถาบันรับฝาก",
+    "DPSACBW027SBOG": "เงินฝากธนาคารพาณิชย์ (รายสัปดาห์)",
+    "RRPONTSYD": "Reverse Repo (ON RRP)",
+    "GFDEGDQ188S": "หนี้สาธารณะต่อ GDP (รายไตรมาส)",
 }
 
 CURVE_SNAPSHOT = ["DGS3MO", "DGS2", "DGS10", "DGS30"]
@@ -38,8 +48,11 @@ CURVE_TENORS_Y = {"DGS3MO": 0.25, "DGS2": 2, "DGS10": 10, "DGS30": 30}
 
 # สินทรัพย์ในตาราง Trend State (ตามที่ผู้ใช้ติดตาม + พันธบัตร)
 YF_ASSETS = {
-    "^NDX": "NAS100", "^DJI": "US30", "ETH-USD": "ETH", "SOL-USD": "SOL",
-    "CL=F": "USOIL", "EURUSD=X": "EURUSD", "TLT": "TLT (20y+ UST ETF)",
+    "^NDX": "NAS100", "^GSPC": "US500", "^DJI": "US30",
+    "ETH-USD": "ETH", "SOL-USD": "SOL", "BTC-USD": "BTC",
+    "CL=F": "USOIL", "GC=F": "XAUUSD", "DX-Y.NYB": "DXY",
+    "EURUSD=X": "EURUSD", "AUDUSD=X": "AUDUSD", "USDJPY=X": "USDJPY",
+    "GBPUSD=X": "GBPUSD", "TLT": "TLT (20y+ UST ETF)",
 }
 YF_MOVE = "^MOVE"
 
@@ -130,16 +143,38 @@ def demo_bundle(seed: int = 11) -> dict:
     vix = stress_like(16, 0.15, 30).clip(9, None)
     move = stress_like(90, 0.8, 110).clip(40, None)
 
-    fred = {"DGS3MO": y3m, "DGS2": pd.Series(y2, index=days), "DGS10": y10,
+    # v3 demo series: เงินเฟ้อ/น้ำมัน/ทอง/repo/เงินฝาก/ยอดกู้ Fed ฯลฯ
+    cpi_m = pd.Series(300 * (1.0025 ** np.arange(n // 21 + 1)),
+                      index=days[::21][: n // 21 + 1])
+    t5yie = stress_like(2.3, 0.004, 0.9).clip(0.5, None)
+    oil = stress_like(75, 0.35, 40).clip(20, None)
+    effr = pd.Series(np.full(n, 5.33), index=days)
+    sofr = effr + stress_like(0.0, 0.002, 0.35).clip(-0.05, None)
+    borrow = stress_like(5, 0.05, 160).clip(0.5, None)
+    depo_base = rw(17500, 4.0)
+    dip = np.zeros(n); dip[stress_start:stress_end] = np.linspace(0, -600, stress_end - stress_start)
+    dip[stress_end:] = np.linspace(-600, -200, n - stress_end)
+    depo = (depo_base + dip).iloc[::5]
+    rrp = pd.Series(np.linspace(1200, 150, n), index=days) + rw(0, 3.0)
+    debt_gdp = pd.Series(np.linspace(118, 124, n // 63 + 1), index=days[::63][: n // 63 + 1])
+    fred = {"CPIAUCSL": cpi_m, "T5YIE": t5yie, "DCOILWTICO": oil,
+            "SOFR": sofr, "EFFR": effr, "BORROW": borrow,
+            "DPSACBW027SBOG": depo, "RRPONTSYD": rrp,
+            "GFDEGDQ188S": debt_gdp,
+            "DGS3MO": y3m, "DGS2": pd.Series(y2, index=days), "DGS10": y10,
             "DGS30": pd.Series(y30, index=days), "T10Y3M": t10y3m,
             "T10Y2Y": t10y2y, "STLFSI4": stlfsi.iloc[::5],  # weekly-ish
             "NFCI": nfci.iloc[::5], "BAMLH0A0HYM2": hy, "BAMLC0A0CM": ig,
             "VIXCLS": vix, "_errors": {}}
 
-    # asset prices: เทรนด์ขึ้น แล้ว drawdown ช่วงเครียด
+    # asset prices: เทรนด์ขึ้น แล้ว drawdown ช่วงเครียด (ฐานราคาสมจริงต่อสินทรัพย์)
+    DEMO_BASE = {"^NDX": 25000, "^GSPC": 7000, "^DJI": 51000, "ETH-USD": 1700,
+                 "SOL-USD": 70, "BTC-USD": 63000, "CL=F": 73, "GC=F": 4000,
+                 "DX-Y.NYB": 100, "EURUSD=X": 1.14, "AUDUSD=X": 0.69,
+                 "USDJPY=X": 162, "GBPUSD=X": 1.31, "TLT": 92}
     prices = {}
     for tkr in list(YF_ASSETS) :
-        base = rng.uniform(50, 20000)
+        base = DEMO_BASE.get(tkr, 100.0)
         ret = rng.normal(0.0004, 0.012, n)
         ret[stress_start:stress_end] -= 0.004
         prices[tkr] = pd.Series(base * np.exp(np.cumsum(ret)), index=days)
